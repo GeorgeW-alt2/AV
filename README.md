@@ -1,2 +1,2 @@
 # AV
-quick antivirus PowerShell script with quarantine 
+use powershell -ExecutionPolicy Bypass -File .\AV.ps1
