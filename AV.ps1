@@ -1,6 +1,21 @@
 # Import the necessary module for ZIP functionality
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
+# Generate a timestamp for consistent naming
+$timestamp = Get-Date -Format 'yyyyMMddHHmmss'
+
+# Define the log file
+$logFile = Join-Path -Path $env:TEMP -ChildPath "ProcessLog_$timestamp.log"
+
+# Function to log messages
+function Log-Message {
+    param(
+        [string]$Message
+    )
+    $entry = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - $Message"
+    $entry | Add-Content -Path $logFile
+}
+
 # Function to create a ZIP archive
 function Create-Zip {
     param (
@@ -30,7 +45,7 @@ function Get-SignedStatus {
 }
 
 # Create a temporary directory to store process files
-$tempDir = Join-Path -Path $env:TEMP -ChildPath "UnsignedProcesses_$(Get-Date -Format 'yyyyMMddHHmmss')"
+$tempDir = Join-Path -Path $env:TEMP -ChildPath "UnsignedProcesses_$timestamp"
 New-Item -ItemType Directory -Path $tempDir | Out-Null
 
 # Get all running processes
@@ -45,22 +60,27 @@ foreach ($process in $processes) {
             Copy-Item -Path $process.Path -Destination $destinationFile -Force -ErrorAction SilentlyContinue
             
             # Log the action
-            Write-Output "Saved unsigned process: $($process.Name) (ID: $($process.Id)) to $destinationFile"
+            Log-Message "Saved unsigned process: $($process.Name) (ID: $($process.Id)) to $destinationFile"
             
             # Terminate the process
-            Write-Output "Terminating unsigned process: $($process.Name) (ID: $($process.Id))"
+            Log-Message "Terminating unsigned process: $($process.Name) (ID: $($process.Id))"
             Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
         } catch {
-            Write-Warning "Failed to process $($process.Name): $_"
+            Log-Message "Failed to process $($process.Name): $_"
         }
     }
 }
 
-# Create a ZIP archive of the unsigned process files
-$zipFile = Join-Path -Path $env:TEMP -ChildPath "UnsignedProcesses.zip"
+# Create a timestamped ZIP file
+$zipFile = Join-Path -Path $env:TEMP -ChildPath "UnsignedProcesses_$timestamp.zip"
 Create-Zip -SourceFolder $tempDir -DestinationZip $zipFile
+
+# Log the completion
+Log-Message "Unsigned processes saved and terminated. Files are in: $zipFile"
 
 # Cleanup temporary folder
 Remove-Item -Path $tempDir -Recurse -Force
 
-Write-Output "Unsigned processes saved and terminated. Files are in: $zipFile"
+# Inform the user where the log and ZIP files are located
+Write-Output "Process completed. Log file: $logFile"
+Write-Output "ZIP file: $zipFile"
