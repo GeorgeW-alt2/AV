@@ -11,7 +11,19 @@ def is_windows_process(proc):
             return True
     except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
         pass
-    return True
+    return False
+
+def is_python_process(proc):
+    """
+    Determine if a process is a Python process.
+    """
+    try:
+        exe = proc.exe().lower()
+        if "python" in exe:
+            return True
+    except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
+        pass
+    return False
 
 def can_terminate_process(proc):
     """
@@ -25,9 +37,9 @@ def can_terminate_process(proc):
     except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess):
         return False
 
-def kill_non_windows_processes():
+def kill_non_windows_non_python_processes():
     """
-    Iterate over all running processes and terminate non-Windows processes.
+    Iterate over all running processes and terminate all non-Windows, non-Python processes.
     """
     for proc in psutil.process_iter(['pid', 'name', 'exe']):
         try:
@@ -35,7 +47,7 @@ def kill_non_windows_processes():
             if pid in (0, 4):  # Skip critical Windows processes
                 continue
 
-            if not is_windows_process(proc) and can_terminate_process(proc):
+            if not is_windows_process(proc) and not is_python_process(proc) and can_terminate_process(proc):
                 print(f"Terminating process {proc.info['name']} (PID: {pid})")
                 os.kill(pid, 9)  # Sends SIGKILL
         except (psutil.AccessDenied, psutil.NoSuchProcess, psutil.ZombieProcess) as e:
@@ -44,8 +56,8 @@ def kill_non_windows_processes():
             print(f"Permission denied for process {proc.info['name']} (PID: {pid}): {e}")
 
 if __name__ == "__main__":
-    confirm = input("This will terminate all non-Windows processes. Do you want to continue? (yes/no): ")
+    confirm = input("This will terminate all non-Windows, non-Python processes. Do you want to continue? (yes/no): ")
     if confirm.lower() == 'yes':
-        kill_non_windows_processes()
+        kill_non_windows_non_python_processes()
     else:
         print("Operation canceled.")
