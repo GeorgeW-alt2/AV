@@ -1,6 +1,7 @@
 import os
 import shutil
 import psutil
+import pefile
 from datetime import datetime
 
 # Define the patterns to look for
@@ -64,11 +65,34 @@ def kill_process(filepath):
     except Exception as e:
         print(f"[!] Error killing process for {filepath}: {e}")
 
+def is_digital_signature_valid(filepath):
+    """
+    Check if the .exe file is digitally signed.
+    Returns True if signed, False if not.
+    """
+    try:
+        pe = pefile.PE(filepath)
+        # Check for certificates in the PE file's resource section
+        if hasattr(pe, 'DIRECTORY_ENTRY_RESOURCE'):
+            for entry in pe.DIRECTORY_ENTRY_RESOURCE.entries:
+                if entry.name and entry.name.decode() == 'Certificate':
+                    return True
+        return False
+    except Exception as e:
+        print(f"[!] Error checking digital signature for {filepath}: {e}")
+        return False
+
 def scan_file(filepath):
     """
     Scan a file for suspicious patterns, quarantine, delete it, and kill associated processes if detected.
     """
     try:
+        if not is_digital_signature_valid(filepath):
+            print(f"[!] No valid digital signature found for: {filepath}. Deleting file.")
+            os.remove(filepath)
+            log_quarantine(filepath, "Deleted (No signature)")
+            return
+        
         with open(filepath, "r", encoding="utf-8", errors="ignore") as file:
             content = file.read()
         
@@ -83,7 +107,7 @@ def scan_file(filepath):
 
 def scan_directory(directory):
     """
-    Scan all `.exe` files in a directory for suspicious patterns.
+    Scan all `.exe` files in a directory for suspicious patterns and digital signature validity.
     """
     for root, dirs, files in os.walk(directory):
         for file in files:
