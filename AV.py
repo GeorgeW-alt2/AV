@@ -1,10 +1,11 @@
 import os
 import shutil
+import psutil
 from datetime import datetime
 
 # Define the patterns to look for
 SUSPICIOUS_KEYWORDS = ["shell", "socket"]
-MAX_SAFE_FILE_SIZE = 5 * 1024 * 1024  # 5 MB
+MAX_SAFE_FILE_SIZE = 15 * 1024 * 1024  # 15 MB
 QUARANTINE_DIR = "quarantine"
 LOG_FILE = "quarantine_log.txt"
 
@@ -15,12 +16,12 @@ def create_quarantine_directory():
     if not os.path.exists(QUARANTINE_DIR):
         os.makedirs(QUARANTINE_DIR)
 
-def log_quarantine(filepath):
+def log_quarantine(filepath, action):
     """
     Log quarantined file details into a log file.
     """
     with open(LOG_FILE, "a") as log:
-        log.write(f"{datetime.now()}: Quarantined {filepath}\n")
+        log.write(f"{datetime.now()}: {action} {filepath}\n")
 
 def quarantine_file(filepath):
     """
@@ -32,13 +33,40 @@ def quarantine_file(filepath):
         quarantined_path = os.path.join(QUARANTINE_DIR, os.path.basename(filepath))
         shutil.copy(filepath, quarantined_path)
         print(f"[!] Quarantined file: {filepath}")
-        log_quarantine(filepath)
+        log_quarantine(filepath, "Quarantined")
+        
+        # After quarantine, delete the original file
+        os.remove(filepath)
+        print(f"[!] Deleted original file: {filepath}")
+        log_quarantine(filepath, "Deleted")
+        
     except Exception as e:
-        print(f"[!] Error quarantining file {filepath}: {e}")
+        print(f"[!] Error quarantining/deleting file {filepath}: {e}")
+
+def kill_process(filepath):
+    """
+    Kill any processes associated with the suspicious file.
+    """
+    try:
+        # Get the process ID (PID) for any process with the filename
+        for proc in psutil.process_iter(['pid', 'name', 'exe']):
+            if proc.info['exe'] and filepath.lower() == proc.info['exe'].lower():
+                print(f"[!] Killing process: {proc.info['pid']} running {proc.info['exe']}")
+                proc.terminate()  # Try to kill the process
+                proc.wait()  # Wait for the process to terminate
+                print(f"[!] Process killed: {proc.info['pid']}")
+                log_quarantine(filepath, f"Killed process {proc.info['pid']}")
+                break
+    except psutil.NoSuchProcess as e:
+        print(f"[!] Process not found for {filepath}: {e}")
+    except psutil.AccessDenied as e:
+        print(f"[!] Access denied when trying to kill process {filepath}: {e}")
+    except Exception as e:
+        print(f"[!] Error killing process for {filepath}: {e}")
 
 def scan_file(filepath):
     """
-    Scan a file for suspicious patterns and quarantine if both 'shell' and 'socket' are detected.
+    Scan a file for suspicious patterns, quarantine, delete it, and kill associated processes if detected.
     """
     try:
         with open(filepath, "r", encoding="utf-8", errors="ignore") as file:
@@ -46,7 +74,9 @@ def scan_file(filepath):
         
         # Check for both "shell" and "socket" in the content
         if "shell" in content and "socket" in content:
-            quarantine_file(filepath)
+            print(f"[!] Suspicious file detected: {filepath}")
+            kill_process(filepath)  # Kill any running process associated with the file
+            quarantine_file(filepath)  # Quarantine and delete the file
         
     except Exception as e:
         print(f"[!] Error scanning file {filepath}: {e}")
