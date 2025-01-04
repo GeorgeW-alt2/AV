@@ -178,88 +178,122 @@ def train_model(
         logging.info(f"Epoch [{epoch+1}/{num_epochs}], Loss: {epoch_loss:.4f}")
     
     return losses
+def load_exe_paths_and_labels(clean_file_path: str, dirty_file_path: str) -> Tuple[List[str], List[int]]:
+    """
+    Load executable paths from two separate files and assign labels (0 for clean, 1 for dirty).
+    
+    Args:
+        clean_file_path (str): Path to the file containing executable paths of clean files.
+        dirty_file_path (str): Path to the file containing executable paths of dirty files.
+        
+    Returns:
+        Tuple of (exe_paths, labels) where:
+            - exe_paths is a list of paths from both clean and dirty files.
+            - labels is a list of integers, 0 for clean, 1 for dirty.
+    """
+    try:
+        # Load clean executable paths
+        with open(clean_file_path, 'r') as clean_file:
+            clean_paths = [line.strip() for line in clean_file.readlines()]
+        
+        # Load dirty executable paths
+        with open(dirty_file_path, 'r') as dirty_file:
+            dirty_paths = [line.strip() for line in dirty_file.readlines()]
+        
+        # Assign labels: 0 for clean, 1 for dirty
+        labels = [0] * len(clean_paths) + [1] * len(dirty_paths)
+        
+        # Combine clean and dirty paths
+        exe_paths = clean_paths + dirty_paths
+        
+        logging.info(f"Loaded {len(exe_paths)} executable paths with labels.")
+        return exe_paths, labels
+    
+    except Exception as e:
+        logging.error(f"Error loading executable paths and labels: {e}")
+        raise
 
 def main():
-    # Configuration
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    max_len = 100
-    min_string_length = 4
-    batch_size = 32
-    num_epochs = 10
-    learning_rate = 0.001
-    model_path = 'exe_scanner_model.pth'
-    
-    # Initialize scanner
+    # Configuration settings
+    clean_file_path = 'clean.txt'  # Path to the clean executables list
+    dirty_file_path = 'dirty.txt'  # Path to the dirty (malicious) executables list
+    max_len = 100  # Maximum length of tokenized sequences
+    min_string_length = 4  # Minimum length of strings to extract
+    batch_size = 32  # Batch size for training
+    num_epochs = 10  # Number of epochs to train
+    learning_rate = 0.001  # Learning rate for the optimizer
+    model_save_path = 'models/exe_scanner_model.pth'  # Path to save the model
+    tokenizer_save_path = 'models/tokenizer.json'  # Path to save the tokenizer
+
+    # Initialize ExeScanner instance
     scanner = ExeScanner(max_len=max_len, min_string_length=min_string_length)
     
     try:
-        # Load and prepare data
-        exe_paths = ['AxInstUI.exe', 'bcdboot.exe']  # Replace with actual paths
-        labels = [0, 1]  # 0: benign, 1: malicious
+        # Load executable paths and labels from clean.txt and dirty.txt
+        exe_paths, labels = load_exe_paths_and_labels(clean_file_path, dirty_file_path)
         
+        # Extract strings from executables
         all_strings = []
-        all_labels = []
-        for path, label in zip(exe_paths, labels):
+        for path in exe_paths:
             strings = scanner.extract_strings_from_exe(path)
             all_strings.extend(strings)
-            all_labels.extend([label] * len(strings))
         
-        # Prepare data
-        X, y, tokenizer = scanner.prepare_data(all_strings, all_labels)
+        # Prepare data (tokenize strings and create sequences)
+        X, y, tokenizer = scanner.prepare_data(all_strings, labels)
         
-        # Create dataset and dataloader
+        # Create Dataset and DataLoader for training
         dataset = ExeDataset(X, y)
         train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
         
-        # Initialize model
+        # Initialize the model and move it to the selected device (GPU/CPU)
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model = ExeScannerModel(vocab_size=len(tokenizer), input_length=max_len)
+        model = model.to(device)
         
-        # Try to load existing model
-        if os.path.exists(model_path):
+        # Set up the loss function and optimizer
+        criterion = nn.CrossEntropyLoss()
+        optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+        
+        # Load existing model if available (to resume training)
+        start_epoch = 0
+        if os.path.exists(model_save_path):
             try:
-                logging.info(f"Loading existing model from {model_path}")
-                checkpoint = torch.load(model_path, map_location=device,weights_only=True)
-                model.load_state_dict(checkpoint['model_state_dict'])
-                scanner.tokenizer = checkpoint['tokenizer']
-                scanner.max_len = checkpoint['max_len']
-                logging.info("Model loaded successfully")
+                model, optimizer, start_epoch = scanner.load_model(model, model_save_path, optimizer)
+                logging.info(f"Resumed training from epoch {start_epoch}")
             except Exception as e:
-                logging.error(f"Error loading model: {e}")
-                logging.info("Training new model instead")
-                # Continue with training new model
-                model = ExeScannerModel(vocab_size=len(tokenizer), input_length=max_len)
-        else:
-            logging.info("No existing model found. Training new model...")
-            # Train new model
-            criterion = nn.CrossEntropyLoss()
-            optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-            
-            # Train model
-            losses = train_model(model, train_loader, criterion, optimizer, device, num_epochs)
-            
-            # Save model
-            torch.save({
-                'model_state_dict': model.state_dict(),
-                'tokenizer': tokenizer,
-                'max_len': max_len
-            }, model_path)
-            logging.info(f"New model saved to {model_path}")
+                logging.warning(f"Could not load existing model, starting fresh: {e}")
         
-        # Test prediction
+        # Train the model for the specified number of epochs
+        for epoch in range(start_epoch, num_epochs):
+            # Train for one epoch
+            train_model(model, train_loader, criterion, optimizer, device, num_epochs=1)
+            
+            # Save the model checkpoint and tokenizer after each epoch
+            try:
+                scanner.save_model(model, model_save_path, optimizer, epoch + 1)
+                scanner.save_tokenizer(tokenizer_save_path)
+            except Exception as e:
+                logging.error(f"Failed to save checkpoint: {e}")
+        
+        # Perform prediction with the trained model (using a sample test executable)
         test_file = "alg.exe"
         if os.path.exists(test_file):
-            test_strings = scanner.extract_strings_from_exe(test_file)
-            test_sequences, _, _ = scanner.prepare_data(test_strings, [0] * len(test_strings))
-            test_tensor = torch.tensor(test_sequences, dtype=torch.long).to(device)
-            
-            model.eval()
-            with torch.no_grad():
-                predictions = model(test_tensor)
-                predicted_labels = torch.argmax(predictions, dim=1)
-                logging.info(f"Predictions (Benign=0, Malicious=1): {predicted_labels.cpu().numpy()}")
+            try:
+                model.eval()
+                test_strings = scanner.extract_strings_from_exe(test_file)
+                test_sequences, _, _ = scanner.prepare_data(test_strings, [0] * len(test_strings))  # Assuming 0 for benign
+                test_tensor = torch.tensor(test_sequences, dtype=torch.long).to(device)
+                
+                with torch.no_grad():
+                    predictions = model(test_tensor)
+                    predicted_labels = torch.argmax(predictions, dim=1)
+                    logging.info(f"Predictions (Benign=0, Malicious=1): {predicted_labels.cpu().numpy()}")
+                    
+            except Exception as e:
+                logging.error(f"Error during prediction: {e}")
                 
     except Exception as e:
-        logging.error(f"An error occurred: {e}")
+        logging.error(f"An error occurred in main: {e}")
         raise
 
 if __name__ == "__main__":
