@@ -98,34 +98,24 @@ class ExeScanner:
         logging.info(f"Prepared {len(padded_sequences)} sequences with matching labels")
         return padded_sequences, np.array(labels), self.tokenizer
 
-    def save_model(self, model: nn.Module, path: str, optimizer: optim.Optimizer, epoch: int):
-        """Save model checkpoint."""
+    def save_model(self, model: nn.Module, path: str):
+        """Save model and tokenizer."""
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        torch.save({
-            'epoch': epoch,
+        state = {
             'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
             'tokenizer': self.tokenizer,
             'max_len': self.max_len
-        }, path)
+        }
+        torch.save(state, path)
         logging.info(f"Model saved to {path}")
 
-    def save_tokenizer(self, path: str):
-        """Save tokenizer to JSON file."""
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, 'w') as f:
-            json.dump(self.tokenizer, f)
-        logging.info(f"Tokenizer saved to {path}")
-
-    def load_model(self, model: nn.Module, path: str, optimizer: optim.Optimizer = None) -> Tuple[nn.Module, optim.Optimizer, int]:
-        """Load model checkpoint."""
-        checkpoint = torch.load(path)
-        model.load_state_dict(checkpoint['model_state_dict'])
-        if optimizer:
-            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        self.tokenizer = checkpoint['tokenizer']
-        self.max_len = checkpoint['max_len']
-        return model, optimizer, checkpoint['epoch']
+    def load_model(self, model: nn.Module, path: str) -> nn.Module:
+        """Load model and tokenizer."""
+        state = torch.load(path,weights_only=True)
+        model.load_state_dict(state['model_state_dict'])
+        self.tokenizer = state['tokenizer']
+        self.max_len = state['max_len']
+        return model
 
 class ExeDataset(Dataset):
     def __init__(self, strings: np.ndarray, labels: np.ndarray):
@@ -268,7 +258,6 @@ def main():
     num_epochs = 10
     learning_rate = 0.001
     model_save_path = 'models/exe_scanner_model.pth'
-    tokenizer_save_path = 'models/tokenizer.json'
 
     # Initialize scanner
     scanner = ExeScanner(max_len=max_len, min_string_length=min_string_length)
@@ -309,28 +298,31 @@ def main():
         criterion = nn.CrossEntropyLoss()
         optimizer = optim.Adam(model.parameters(), lr=learning_rate)
         
-        # Load existing model if available
-        start_epoch = 0
+        # Check if model exists
         if os.path.exists(model_save_path):
+            # Load existing model
             try:
-                model, optimizer, start_epoch = scanner.load_model(model, model_save_path, optimizer)
-                logging.info(f"Resumed training from epoch {start_epoch}")
+                model = scanner.load_model(model, model_save_path)
+                logging.info("Loaded existing model.")
             except Exception as e:
-                logging.warning(f"Could not load existing model, starting fresh: {e}")
-        
-        # Train model
-        for epoch in range(start_epoch, num_epochs):
-            train_model(model, train_loader, criterion, optimizer, device, num_epochs=1)
+                logging.warning(f"Could not load existing model: {e}")
+                # Proceed to training a new model
+                losses = train_model(model, train_loader, criterion, optimizer, device, num_epochs)
+                
+                # Save the newly trained model
+                logging.info("Saving the newly trained model.")
+                scanner.save_model(model, model_save_path)
+        else:
+            # If no model exists, train a new model
+            logging.info("No model found. Training a new model.")
+            losses = train_model(model, train_loader, criterion, optimizer, device, num_epochs)
             
-            # Save checkpoints
-            try:
-                scanner.save_model(model, model_save_path, optimizer, epoch + 1)
-                scanner.save_tokenizer(tokenizer_save_path)
-            except Exception as e:
-                logging.error(f"Failed to save checkpoint: {e}")
+            # Save the newly trained model
+            logging.info("Saving the newly trained model.")
+            scanner.save_model(model, model_save_path)
         
-        # Test prediction
-        test_file = "test.exe"
+        # Test prediction (optional)
+        test_file = "wiawow64.exe"
         if os.path.exists(test_file):
             try:
                 model.eval()
@@ -349,6 +341,7 @@ def main():
     except Exception as e:
         logging.error(f"An error occurred in main: {e}")
         raise
+
 
 if __name__ == "__main__":
     main()
