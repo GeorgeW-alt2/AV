@@ -1,6 +1,6 @@
 import os
+import zipfile
 import logging
-import psutil
 from datetime import datetime
 from tqdm import tqdm  # Import tqdm for the progress bar
 
@@ -58,111 +58,78 @@ malware_keywords = [
 log_filename = f"malware_scan_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
 logging.basicConfig(filename=log_filename, level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Directory to save the dumps
-dump_dir = "process_dumps"
-os.makedirs(dump_dir, exist_ok=True)
+# Create a ZIP file to store malware-related .exe, .sys, and .dll files
+zip_filename = f"malware_files_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
 
-# Create a ZIP file to store malware-related processes' memory data (in case required)
-zip_filename = f"malware_memory_dump_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
-
-def search_keywords_in_memory(memory_content):
-    """Search for malware keywords in the memory content (byte sequence)."""
+def search_keywords_in_file(file_path):
+    """Search for malware keywords in the binary content of a file."""
     found_keywords = []
     try:
-        for keyword in malware_keywords:
-            keyword_bytes = keyword.encode('utf-8')
-            if keyword_bytes in memory_content:
-                found_keywords.append(keyword)
-                logging.info(f"Malware keyword '{keyword}' found in memory.")
+        with open(file_path, 'rb') as file:
+            content = file.read()
+            for keyword in malware_keywords:
+                keyword_bytes = keyword.encode('utf-8')
+                if keyword_bytes in content:
+                    found_keywords.append(keyword)
+                    logging.info(f"Malware keyword '{keyword}' found in file: {file_path}")
     except Exception as e:
-        logging.error(f"Error scanning memory: {e}")
+        logging.error(f"Error reading {file_path}: {e}")
     return found_keywords
 
-def dump_process_memory(pid, process_name):
-    """Dump the memory of a process to a binary file."""
-    try:
-        process = psutil.Process(pid)
-        memory_content = b""
-        for map in process.memory_maps():
-            # Check if the map has a readable path
-            if map.path and os.access(map.path, os.R_OK):
-                try:
-                    # Open the memory map file and read its content
-                    with open(map.path, 'rb') as mem_file:
-                        memory_content += mem_file.read()
-                except Exception as e:
-                    logging.error(f"Error reading memory map {map.path}: {e}")
-
-        # Create a file to dump the memory content
-        dump_filename = os.path.join(dump_dir, f"{process_name}_{pid}_memory_dump.bin")
-        with open(dump_filename, 'wb') as dump_file:
-            dump_file.write(memory_content)
-            logging.info(f"Memory dump for PID {pid} saved to {dump_filename}")
-
-    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess) as e:
-        logging.error(f"Cannot access process {pid} memory: {e}")
-
-def scan_process_memory(pid):
-    """Scan the memory of a process for malware-related keywords."""
-    try:
-        process = psutil.Process(pid)
-        process_name = process.name()
-        memory_content = b""
-        for map in process.memory_maps():
-            # Check if the map has a readable path
-            if map.path and os.access(map.path, os.R_OK):
-                try:
-                    # Open the memory map file and read its content
-                    with open(map.path, 'rb') as mem_file:
-                        memory_content += mem_file.read()
-                except Exception as e:
-                    logging.error(f"Error reading memory map {map.path}: {e}")
-
-        # Search for malware keywords in the collected memory content
-        found_keywords = search_keywords_in_memory(memory_content)
-        if found_keywords:
-            severity = calculate_severity(len(found_keywords))
-            logging.info(f"Process ID {pid} | Keywords Found: {len(found_keywords)} | Severity: {severity}")
-            
-            # Dump the process memory if malware is found
-            dump_process_memory(pid, process_name)
-
-    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess) as e:
-        logging.error(f"Cannot access process {pid} memory: {e}")
-
-def calculate_severity(keyword_count_in_memory):
-    """Calculate risk severity for a process based on the number of keywords found in its memory."""
-    if keyword_count_in_memory >= 6:
+def calculate_severity(keyword_count_in_file):
+    """Calculate risk severity for a file based on the number of keywords found."""
+    if keyword_count_in_file >= 6:
         return "High Risk"
-    elif 3 <= keyword_count_in_memory < 6:
+    elif 3 <= keyword_count_in_file < 6:
         return "Medium Risk"
-    elif 1 <= keyword_count_in_memory < 3:
+    elif 1 <= keyword_count_in_file < 3:
         return "Low Risk"
     else:
         return "No Risk"
 
-def scan_all_processes():
-    """Scan all running processes for malware-related keywords in their memory."""
-    for proc in tqdm(psutil.process_iter(['pid', 'name']), desc="Scanning processes", unit="process"):
-        scan_process_memory(proc.info['pid'])
+def scan_for_malware_keywords(directory_path):
+    """Scan .exe, .sys, .dll files in a directory for malware-related keywords and add them to a ZIP file."""
+    files_to_scan = []
+    
+    # Collect all .exe, .sys, .dll files
+    for root, dirs, files in os.walk(directory_path):
+        for file in files:
+            if file.lower().endswith(('.exe', '.sys', '.dll')):
+                files_to_scan.append(os.path.join(root, file))
+    
+    # Add a progress bar
+    with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        for file_path in tqdm(files_to_scan, desc="Scanning files", unit="file"):
+            found_keywords = search_keywords_in_file(file_path)
+            if found_keywords:
+                severity = calculate_severity(len(found_keywords))
+                logging.info(f"File: {file_path} | Keywords Found: {len(found_keywords)} | Severity: {severity}")
+                try:
+                    zipf.write(file_path, os.path.relpath(file_path, directory_path))
+                    logging.info(f"Added {file_path} to the ZIP archive.")
+                except Exception as e:
+                    logging.error(f"Error adding {file_path} to the ZIP archive: {e}")
 
 def choose_scan_option():
-    """Prompt the user to choose between scanning a specific process or all processes."""
+    """Prompt the user to choose between scanning a specific file or an entire drive."""
     print("Please choose an option:")
-    print("1. Scan a specific process's memory")
-    print("2. Scan all running processes' memory")
+    print("1. Scan a specific .exe, .sys, or .dll file")
+    print("2. Scan an entire drive or directory")
     choice = input("Enter your choice (1 or 2): ").strip()
     
     if choice == "1":
-        pid = input("Enter the process ID (PID) to scan: ").strip()
-        try:
-            pid = int(pid)
-            scan_process_memory(pid)
-        except ValueError:
-            print("Invalid PID. Please enter a valid integer.")
+        file_path = input("Enter the full path of the .exe, .sys, or .dll file: ").strip()
+        if os.path.isfile(file_path) and file_path.lower().endswith(('.exe', '.sys', '.dll')):
+            scan_for_malware_keywords(file_path)
+        else:
+            print("Invalid file path. Please ensure it is a valid .exe, .sys, or .dll file.")
     
     elif choice == "2":
-        scan_all_processes()
+        directory_path = input("Enter the directory to scan (e.g., C:\\Users): ").strip()
+        if os.path.isdir(directory_path):
+            scan_for_malware_keywords(directory_path)
+        else:
+            print("Invalid directory path. Please ensure it is a valid directory.")
     
     else:
         print("Invalid choice. Please enter 1 or 2.")
