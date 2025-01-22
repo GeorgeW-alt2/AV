@@ -1,6 +1,7 @@
 import os
 import logging
 import psutil
+import zipfile
 from datetime import datetime
 from tqdm import tqdm  # Import tqdm for the progress bar
 
@@ -53,13 +54,16 @@ malware_keywords = [
     "file-injector", "trojan-backdoor", "android-exploit", "os-exploit", "rpc-exploit", "dos-exploit", 
     "trojan-payload", "exfil-trojan", "root-exploit", "imposter-virus", "mimicry-malware"
 ]
-
 # Set up logging
 log_filename = f"malware_scan_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
 logging.basicConfig(filename=log_filename, level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Create a ZIP file to store malware-related processes' memory data (in case required)
-zip_filename = f"malware_memory_dump_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+# Directory to save the dumps
+dump_dir = "process_dumps"
+os.makedirs(dump_dir, exist_ok=True)
+
+# Create a ZIP file to store malware-related process memory dumps
+zip_filename = f"malware_memory_dumps_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
 
 def search_keywords_in_memory(memory_content):
     """Search for malware keywords in the memory content (byte sequence)."""
@@ -74,10 +78,40 @@ def search_keywords_in_memory(memory_content):
         logging.error(f"Error scanning memory: {e}")
     return found_keywords
 
+def dump_process_memory(pid, process_name):
+    """Dump the memory of a process to a binary file and add it to the ZIP archive."""
+    try:
+        process = psutil.Process(pid)
+        memory_content = b""
+        for map in process.memory_maps():
+            # Check if the map has a readable path
+            if map.path and os.access(map.path, os.R_OK):
+                try:
+                    # Open the memory map file and read its content
+                    with open(map.path, 'rb') as mem_file:
+                        memory_content += mem_file.read()
+                except Exception as e:
+                    logging.error(f"Error reading memory map {map.path}: {e}")
+
+        # Create a file to dump the memory content
+        dump_filename = os.path.join(dump_dir, f"{process_name}_{pid}_memory_dump.bin")
+        with open(dump_filename, 'wb') as dump_file:
+            dump_file.write(memory_content)
+            logging.info(f"Memory dump for PID {pid} saved to {dump_filename}")
+
+        # Add the dump file to the ZIP archive
+        with zipfile.ZipFile(zip_filename, 'a', zipfile.ZIP_DEFLATED) as zipf:
+            zipf.write(dump_filename, os.path.basename(dump_filename))  # Add file to ZIP
+            logging.info(f"Added {dump_filename} to the ZIP archive.")
+
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess) as e:
+        logging.error(f"Cannot access process {pid} memory: {e}")
+
 def scan_process_memory(pid):
     """Scan the memory of a process for malware-related keywords."""
     try:
         process = psutil.Process(pid)
+        process_name = process.name()
         memory_content = b""
         for map in process.memory_maps():
             # Check if the map has a readable path
@@ -94,6 +128,10 @@ def scan_process_memory(pid):
         if found_keywords:
             severity = calculate_severity(len(found_keywords))
             logging.info(f"Process ID {pid} | Keywords Found: {len(found_keywords)} | Severity: {severity}")
+            
+            # Dump the process memory and add to ZIP archive if malware is found
+            dump_process_memory(pid, process_name)
+
     except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess) as e:
         logging.error(f"Cannot access process {pid} memory: {e}")
 
