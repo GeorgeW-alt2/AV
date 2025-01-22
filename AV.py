@@ -2,6 +2,7 @@ import os
 import zipfile
 import logging
 from datetime import datetime
+from tqdm import tqdm  # Import tqdm for the progress bar
 
 # List of malware-related keywords (as defined in the previous steps)
 malware_keywords = [
@@ -88,20 +89,26 @@ def calculate_severity(keyword_count_in_file):
 
 def scan_for_malware_keywords(directory_path):
     """Scan .exe, .sys, .dll files in a directory for malware-related keywords and add them to a ZIP file."""
+    files_to_scan = []
+    
+    # Collect all .exe, .sys, .dll files
+    for root, dirs, files in os.walk(directory_path):
+        for file in files:
+            if file.lower().endswith(('.exe', '.sys', '.dll')):
+                files_to_scan.append(os.path.join(root, file))
+    
+    # Add a progress bar
     with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
-        for root, dirs, files in os.walk(directory_path):
-            for file in files:
-                if file.lower().endswith(('.exe', '.sys', '.dll')):  # Scan .exe, .sys, and .dll files
-                    file_path = os.path.join(root, file)
-                    found_keywords = search_keywords_in_file(file_path)
-                    if found_keywords:
-                        severity = calculate_severity(len(found_keywords))
-                        logging.info(f"File: {file_path} | Keywords Found: {len(found_keywords)} | Severity: {severity}")
-                        try:
-                            zipf.write(file_path, os.path.relpath(file_path, directory_path))
-                            logging.info(f"Added {file_path} to the ZIP archive.")
-                        except Exception as e:
-                            logging.error(f"Error adding {file_path} to the ZIP archive: {e}")
+        for file_path in tqdm(files_to_scan, desc="Scanning files", unit="file"):
+            found_keywords = search_keywords_in_file(file_path)
+            if found_keywords:
+                severity = calculate_severity(len(found_keywords))
+                logging.info(f"File: {file_path} | Keywords Found: {len(found_keywords)} | Severity: {severity}")
+                try:
+                    zipf.write(file_path, os.path.relpath(file_path, directory_path))
+                    logging.info(f"Added {file_path} to the ZIP archive.")
+                except Exception as e:
+                    logging.error(f"Error adding {file_path} to the ZIP archive: {e}")
 
 def choose_scan_option():
     """Prompt the user to choose between scanning a specific file or an entire drive."""
@@ -132,4 +139,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
