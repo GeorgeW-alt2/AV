@@ -1,104 +1,66 @@
 #include <windows.h>
 #include <iostream>
-#include <string>
+#include <cstdlib>
 
-class NetworkBlocker {
-private:
-    bool executeCommand(const std::string& command) {
-        // Create pipe for reading command output
-        SECURITY_ATTRIBUTES sa;
-        sa.nLength = sizeof(SECURITY_ATTRIBUTES);
-        sa.bInheritHandle = TRUE;
-        sa.lpSecurityDescriptor = NULL;
+bool networkEnabled = true;
 
-        HANDLE hReadPipe, hWritePipe;
-        if (!CreatePipe(&hReadPipe, &hWritePipe, &sa, 0)) {
-            std::cerr << "Failed to create pipe" << std::endl;
-            return false;
+// Function to enable/disable network adapter
+void toggleNetwork() {
+    if (networkEnabled) {
+        // Disable network adapter
+        system("netsh interface set interface \"Ethernet\" admin=disable");
+        system("netsh interface set interface \"Wi-Fi\" admin=disable");
+        networkEnabled = false;
+        std::cout << "Network disabled\n";
+    } else {
+        // Enable network adapter
+        system("netsh interface set interface \"Ethernet\" admin=enable");
+        system("netsh interface set interface \"Wi-Fi\" admin=enable");
+        networkEnabled = true;
+        std::cout << "Network enabled\n";
+    }
+}
+
+// Windows procedure for handling keyboard input
+LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
+    if (nCode >= 0) {
+        if (wParam == WM_KEYDOWN) {
+            KBDLLHOOKSTRUCT* kbStruct = (KBDLLHOOKSTRUCT*)lParam;
+            // Check for F12 key
+            if (kbStruct->vkCode == VK_F12) {
+                toggleNetwork();
+            }
         }
-
-        // Set up process info
-        STARTUPINFOA si = {0};
-        si.cb = sizeof(STARTUPINFOA);
-        si.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
-        si.wShowWindow = SW_HIDE;
-        si.hStdOutput = hWritePipe;
-        si.hStdError = hWritePipe;
-
-        PROCESS_INFORMATION pi = {0};
-
-        // Create process
-        if (!CreateProcessA(
-            NULL,
-            (LPSTR)command.c_str(),
-            NULL,
-            NULL,
-            TRUE,
-            CREATE_NO_WINDOW,
-            NULL,
-            NULL,
-            &si,
-            &pi
-        )) {
-            std::cerr << "Failed to create process. Error: " << GetLastError() << std::endl;
-            CloseHandle(hReadPipe);
-            CloseHandle(hWritePipe);
-            return false;
-        }
-
-        // Wait for process to finish
-        WaitForSingleObject(pi.hProcess, INFINITE);
-
-        // Get exit code
-        DWORD exitCode;
-        GetExitCodeProcess(pi.hProcess, &exitCode);
-
-        // Clean up
-        CloseHandle(pi.hProcess);
-        CloseHandle(pi.hThread);
-        CloseHandle(hReadPipe);
-        CloseHandle(hWritePipe);
-
-        return exitCode == 0;
     }
-
-public:
-    bool blockNetworkTraffic() {
-        // Block outbound traffic using netsh
-        std::string command = "netsh advfirewall firewall add rule name=\"BlockAll\" dir=out action=block enable=yes";
-        return executeCommand(command);
-    }
-
-    bool unblockNetworkTraffic() {
-        // Remove blocking rule
-        std::string command = "netsh advfirewall firewall delete rule name=\"BlockAll\"";
-        return executeCommand(command);
-    }
-};
+    return CallNextHookEx(NULL, nCode, wParam, lParam);
+}
 
 int main() {
-    try {
-        std::cout << "Initializing network blocker (requires admin rights)..." << std::endl;
-        NetworkBlocker blocker;
+    std::cout << "Network Toggle Program\n";
+    std::cout << "Press F12 to toggle network connection\n";
+    std::cout << "Press Ctrl+C to exit\n\n";
 
-        std::cout << "Blocking network traffic..." << std::endl;
-        if (blocker.blockNetworkTraffic()) {
-            std::cout << "Network traffic blocked. Press Enter to unblock..." << std::endl;
-            std::cin.get();
+    // Set up keyboard hook
+    HHOOK keyboardHook = SetWindowsHookEx(
+        WH_KEYBOARD_LL,
+        KeyboardProc,
+        GetModuleHandle(NULL),
+        0
+    );
 
-            if (blocker.unblockNetworkTraffic()) {
-                std::cout << "Network traffic unblocked." << std::endl;
-            } else {
-                std::cerr << "Failed to unblock network traffic." << std::endl;
-            }
-        } else {
-            std::cerr << "Failed to block network traffic." << std::endl;
-        }
-
-    } catch (const std::exception& e) {
-        std::cerr << "Error: " << e.what() << std::endl;
+    if (keyboardHook == NULL) {
+        std::cout << "Failed to set up keyboard hook\n";
         return 1;
     }
 
+    // Message loop
+    MSG msg;
+    while (GetMessage(&msg, NULL, 0, 0)) {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+    }
+
+    // Clean up
+    UnhookWindowsHookEx(keyboardHook);
     return 0;
 }
