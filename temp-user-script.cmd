@@ -21,8 +21,13 @@ reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v "DeleteR
 :: Disable profile caching
 reg add "HKLM\SYSTEM\CurrentControlSet\Control\Update" /v "UpdateMode" /t REG_DWORD /d 0 /f
 
-:: Add user to Users group
-net localgroup Users %tempUser% /add
+:: Check if user is already in Users group and add if not
+net localgroup Users | find /i "%tempUser%" > nul
+if errorlevel 1 (
+    net localgroup Users %tempUser% /add
+) else (
+    echo User already in Users group - skipping...
+)
 
 :: Set account to not store history
 reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v "Start_TrackDocs" /t REG_DWORD /d 0 /f
